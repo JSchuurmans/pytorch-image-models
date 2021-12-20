@@ -4,24 +4,26 @@
 # data_dir: /scratch/jetzeschuurman/imagenet/data 
 model: efficientnet_b2 
 batch_size: 128 
-sched: step 
 epochs: 3
 decay_epochs: 2.4 
 decay_rate: .97 
 opt: rmsproptf 
 opt_eps: .001 
 workers: 8 
-warmup_lr: 1e-6 
 weight_decay: 1e-5 
 drop: 0.3 
 drop_connect: 0.2 
-model_ema: true 
-model_ema_decay: 0.9999
+model_ema: false # default: true
+# model_ema_decay: 0.9999
 aa: 'rand-m9-mstd0.5'
 remode: pixel 
 reprob: 0.2 
 amp: false
+
+# learning rate and scheduler
 lr: .016
+warmup_lr: 1e-6 
+sched: '' # default: 'step'
 
 # experiment: tddl
 initial_checkpoint: ''
@@ -37,3 +39,5 @@ decompose: true
 factorization: tucker
 fact_rank: 0.75
 layers: k1x1
+
+# log_interval: 1

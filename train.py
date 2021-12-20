@@ -36,6 +36,7 @@ from timm.loss import *
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
+from timm.utils.summary import *
 
 from tddl.factorizations import factorize_network
 
@@ -302,11 +303,13 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
 
+# hardware
 parser.add_argument('--cuda', type=str, default='0',
                     help='select CUDA devices by PCI_BUS_ID (default: 0)')
 parser.add_argument('--cpu', type=str, default='2',
                     help='max number of cpu worker available (default: 2)')
 
+# decomposition
 parser.add_argument('--decompose', action='store_true', default=False,
                     help='')
 parser.add_argument('--factoization', default='tucker', type=str,
@@ -373,11 +376,6 @@ def main():
     setup_default_logging()
     args, args_text = _parse_args()
 
-    print(args.lr)
-    print(type(args.lr))
-
-    # print(args.layers)
-    # print(type(args.layers))
     if isinstance(args.layers, str):
         args.layer_nrs = layer_nrs_efficientnet_b2[args.layers]
     elif isinstance(args.layers, int):
@@ -791,6 +789,13 @@ def train_one_epoch(
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
+            # micro_summary(
+            #     num_updates,
+            #     OrderedDict([('loss', loss.item())]),
+            #     filename=os.path.join(output_dir, 'micro_summary.csv'),
+            #     write_header = num_updates==0,
+            #     log_wandb=args.log_wandb and has_wandb,
+            # )
 
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -838,6 +843,16 @@ def train_one_epoch(
                         rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
                         lr=lr,
                         data_time=data_time_m))
+                
+                micro_summary(
+                    num_updates,
+                    OrderedDict([
+                        ('loss', losses_m.val),
+                        ('loss_avg', losses_m.avg)]),
+                    filename=os.path.join(output_dir, 'summary.csv'),
+                    write_header=num_updates == 1,
+                    log_wandb=args.log_wandb and has_wandb,
+                )
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
