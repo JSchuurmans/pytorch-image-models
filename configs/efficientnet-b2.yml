@@ -3,32 +3,32 @@
 # ./distributed_train.sh 2 
 # data_dir: /scratch/jetzeschuurman/imagenet/data 
 model: efficientnet_b2 
-batch-size: 128 
+batch_size: 128 
 sched: step 
 epochs: 450 
-decay-epochs: 2.4 
-decay-rate: .97 
+decay_epochs: 2.4 
+decay_rate: .97 
 opt: rmsproptf 
-opt-eps: .001 
+opt_eps: .001 
 workers: 8 
-warmup-lr: 1e-6 
-weight-decay: 1e-5 
+warmup_lr: 1e-6 
+weight_decay: 1e-5 
 drop: 0.3 
-drop-connect: 0.2 
-model-ema: true 
-model-ema-decay: 0.9999 
+drop_connect: 0.2 
+model_ema: true 
+model_ema_decay: 0.9999 
 aa: 'rand-m9-mstd0.5'
-rand-m9-mstd: 0.5 
+rand_m9_mstd: 0.5 
 remode: pixel 
 reprob: 0.2 
 amp: false
 lr: .016
 
 experiment: tddl
-initial-checkpoint: ''
+initial_checkpoint: ''
 resume: ''
 output: '/scratch/jetzeschuurman/imagenet/logs'
-log-wandb: true
+log_wandb: true
 
 cuda: '2'
 cpu: '2'

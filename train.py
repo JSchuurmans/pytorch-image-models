@@ -37,6 +37,8 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
 
+from tddl.factorizations import factorize_network
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -300,6 +302,19 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
 
+parser.add_argument('--cuda', type=str, default='0',
+                    help='select CUDA devices by PCI_BUS_ID (default: 0)')
+parser.add_argument('--cpu', type=str, default='2',
+                    help='max number of cpu worker available (default: 2)')
+
+parser.add_argument('--decompose', action='store_true', default=False,
+                    help='')
+parser.add_argument('--factoization', default='tucker', type=str,
+                    help='')
+parser.add_argument('--fact-rank', default=0.5, type=float,
+                    help='')
+parser.add_argument('--layers', default=None, type=str,
+                    help='')
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -318,16 +333,64 @@ def _parse_args():
     return args, args_text
 
 
+# conv_pw_layers = listify_numbered_layers(numbered_layers, layers=['conv_pw'])
+conv_pw_numbers = [14, 26, 31, 45, 59, 74, 88, 102, 117, 131, 145, 159, 174, 188, 202, 216, 231, 245, 259, 273, 287, 302, 316]
+conv_dw_numbers = [6, 18, 34, 48, 62, 77, 91, 105, 120, 134, 148, 162, 177, 191, 205, 219, 234, 248, 262, 276, 290, 305, 319]
+conv_reduce_numbers = [10, 22, 38, 52, 66, 81, 95, 109, 124, 138, 152, 166, 181, 195, 209, 223, 238, 252, 266, 280, 294, 309, 323]
+conv_expand_numbers = [12, 24, 40, 54, 68, 83, 97, 111, 126, 140, 154, 168, 183, 197, 211, 225, 240, 254, 268, 282, 296, 311, 325]
+conv_pwl_numbers = [42, 56, 70, 85, 99, 113, 128, 142, 156, 170, 185, 199, 213, 227, 242, 256, 270, 284, 298, 313, 327]
+k1x1 = conv_pwl_numbers + conv_expand_numbers + conv_reduce_numbers + conv_pw_numbers
+layer_nrs_efficientnet_b2 = {
+    'stem': [0],
+    'pw': conv_pw_numbers,
+    'dw': conv_dw_numbers,
+    'reduce': conv_reduce_numbers,
+    'expand': conv_expand_numbers,
+    'pwl': conv_pwl_numbers,
+    'k1x1': k1x1,
+    'head': [329],
+}
+
+
+# JTS ###########################
+def select_hardware(
+    cuda: str = None,
+    cpu: str = None,
+) -> None:
+    os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+
+    if cuda is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = cuda
+
+    if cpu is not None:
+        os.environ["MKL_NUM_THREADS"] = cpu
+        os.environ["NUMEXPR_NUM_THREADS"] = cpu
+        os.environ["OMP_NUM_THREADS"] = cpu
+################
+
 def main():
+    
     setup_default_logging()
     args, args_text = _parse_args()
-    
-    if args.log_wandb:
-        if has_wandb:
-            wandb.init(project=args.experiment, config=args)
-        else: 
-            _logger.warning("You've requested to log metrics to wandb but package not found. "
-                            "Metrics not being logged to wandb, try `pip install wandb`")
+
+    print(args.lr)
+    print(type(args.lr))
+
+    # print(args.layers)
+    # print(type(args.layers))
+    if isinstance(args.layers, str):
+        args.layer_nrs = layer_nrs_efficientnet_b2[args.layers]
+    elif isinstance(args.layers, int):
+        args.layer_nrs = list(args.layers)
+    elif isinstance(args.layers, list):
+        args.layer_nrs = args.layers
+
+    # JTS ###############
+    select_hardware(
+        cuda=args.cuda,
+        cpu=args.cpu
+    )
+    ##############
              
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
@@ -389,6 +452,54 @@ def main():
             f'Model {safe_model_name(args.model)} created, param count:{sum([m.numel() for m in model.parameters()])}')
 
     data_config = resolve_data_config(vars(args), model=model, verbose=args.local_rank == 0)
+
+    # setup checkpoint saver and eval metric tracking   
+    eval_metric = args.eval_metric
+    best_metric = None
+    best_epoch = None
+    saver = None
+    output_dir = None
+    if args.rank == 0:
+        if args.experiment:
+            exp_name = args.experiment
+        else:
+            string_list = [
+                safe_model_name(args.model),
+                str(data_config['input_size'][-1]),
+            ]
+            if args.decompose:
+                string_list += [args.factorization, str(args.fact_rank), str(args.layers).replace(' ', "")]
+            exp_name = '-'.join(string_list)
+        run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_dir = get_outdir(args.output if args.output else './output/train', exp_name, run_name)
+        decreasing = True if eval_metric == 'loss' else False
+
+    if args.log_wandb:
+        if has_wandb:
+            wandb.init(project=args.experiment, name=run_name, config=args)
+        else: 
+            _logger.warning("You've requested to log metrics to wandb but package not found. "
+                            "Metrics not being logged to wandb, try `pip install wandb`")
+
+    if args.decompose:
+        # TODO save pretrained model
+        torch.save(model, os.path.join(output_dir, "pretrained_model.pth"))
+        
+        # TODO: factorize model
+        factorize_network(
+            model,
+            layers=args.layer_nrs,
+            rank=args.fact_rank,
+            factorization=args.factorization,
+            # verbose=True,
+            # return_error=True,
+        )
+        # _logger.info(output)
+
+        # TODO save decomposed model
+        torch.save(model, os.path.join(output_dir, "decomposed_model.pth"))
+
+        # TODO: evaluate decomposed model
 
     # setup augmentation batch splits for contrastive loss or split bn
     num_aug_splits = 0
@@ -590,27 +701,14 @@ def main():
     validate_loss_fn = nn.CrossEntropyLoss().cuda()
 
     # setup checkpoint saver and eval metric tracking
-    eval_metric = args.eval_metric
-    best_metric = None
-    best_epoch = None
-    saver = None
-    output_dir = None
     if args.rank == 0:
-        if args.experiment:
-            exp_name = args.experiment
-        else:
-            exp_name = '-'.join([
-                datetime.now().strftime("%Y%m%d-%H%M%S"),
-                safe_model_name(args.model),
-                str(data_config['input_size'][-1])
-            ])
-        output_dir = get_outdir(args.output if args.output else './output/train', exp_name)
-        decreasing = True if eval_metric == 'loss' else False
         saver = CheckpointSaver(
             model=model, optimizer=optimizer, args=args, model_ema=model_ema, amp_scaler=loss_scaler,
             checkpoint_dir=output_dir, recovery_dir=output_dir, decreasing=decreasing, max_history=args.checkpoint_hist)
         with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
             f.write(args_text)
+        with open(os.path.join(output_dir, 'args_modified.yaml'), 'w') as f:
+            f.write(yaml.safe_dump(args.__dict__, default_flow_style=False))
 
     try:
         for epoch in range(start_epoch, num_epochs):

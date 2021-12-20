@@ -1,0 +1,39 @@
+# EfficientNet-B2 with RandAugment - 80.4 top-1- 95.1 top-5
+
+# ./distributed_train.sh 2 
+# data_dir: /scratch/jetzeschuurman/imagenet/data 
+model: efficientnet_b2 
+batch_size: 128 
+sched: step 
+epochs: 3
+decay_epochs: 2.4 
+decay_rate: .97 
+opt: rmsproptf 
+opt_eps: .001 
+workers: 8 
+warmup_lr: 1e-6 
+weight_decay: 1e-5 
+drop: 0.3 
+drop_connect: 0.2 
+model_ema: true 
+model_ema_decay: 0.9999
+aa: 'rand-m9-mstd0.5'
+remode: pixel 
+reprob: 0.2 
+amp: false
+lr: .016
+
+# experiment: tddl
+initial_checkpoint: ''
+resume: ''
+output: '/scratch/jetzeschuurman/imagenet/logs'
+log_wandb: true
+pretrained: true
+
+cuda: '2'
+cpu: '4'
+
+decompose: true
+factorization: tucker
+fact_rank: 0.75
+layers: k1x1
