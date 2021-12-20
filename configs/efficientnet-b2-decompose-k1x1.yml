@@ -4,7 +4,7 @@
 # data_dir: /scratch/jetzeschuurman/imagenet/data 
 model: efficientnet_b2 
 batch_size: 128 
-epochs: 3
+epochs: 10
 decay_epochs: 2.4 
 decay_rate: .97 
 opt: rmsproptf 
