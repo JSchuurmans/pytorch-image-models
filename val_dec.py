@@ -319,6 +319,9 @@ parser.add_argument('--fact-rank', default=0.5, type=float,
                     help='')
 parser.add_argument('--layers', default=None, type=str,
                     help='')
+parser.add_argument('--decomposed-model', default='', type=str, metavar='PATH',
+                    help='Path to model to load with torch.load()')
+
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -377,12 +380,12 @@ def main():
     setup_default_logging()
     args, args_text = _parse_args()
 
-    if isinstance(args.layers, str):
-        args.layer_nrs = layer_nrs_efficientnet_b2[args.layers]
-    elif isinstance(args.layers, int):
-        args.layer_nrs = list(args.layers)
-    elif isinstance(args.layers, list):
-        args.layer_nrs = args.layers
+    # if isinstance(args.layers, str):
+    #     args.layer_nrs = layer_nrs_efficientnet_b2[args.layers]
+    # elif isinstance(args.layers, int):
+    #     args.layer_nrs = list(args.layers)
+    # elif isinstance(args.layers, list):
+    #     args.layer_nrs = args.layers
 
     # JTS ###############
     select_hardware(
@@ -428,20 +431,21 @@ def main():
 
     random_seed(args.seed, args.rank)
 
-    model = create_model(
-        args.model,
-        pretrained=args.pretrained,
-        num_classes=args.num_classes,
-        drop_rate=args.drop,
-        drop_connect_rate=args.drop_connect,  # DEPRECATED, use drop_path
-        drop_path_rate=args.drop_path,
-        drop_block_rate=args.drop_block,
-        global_pool=args.gp,
-        bn_tf=args.bn_tf,
-        bn_momentum=args.bn_momentum,
-        bn_eps=args.bn_eps,
-        scriptable=args.torchscript,
-        checkpoint_path=args.initial_checkpoint)
+    model = torch.load(args.decomposed_model)
+    # model = create_model(
+    #     args.model,
+    #     pretrained=args.pretrained,
+    #     num_classes=args.num_classes,
+    #     drop_rate=args.drop,
+    #     drop_connect_rate=args.drop_connect,  # DEPRECATED, use drop_path
+    #     drop_path_rate=args.drop_path,
+    #     drop_block_rate=args.drop_block,
+    #     global_pool=args.gp,
+    #     bn_tf=args.bn_tf,
+    #     bn_momentum=args.bn_momentum,
+    #     bn_eps=args.bn_eps,
+    #     scriptable=args.torchscript,
+    #     checkpoint_path=args.initial_checkpoint)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
@@ -480,37 +484,37 @@ def main():
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
 
-    if args.decompose:
-        if args.resume:
-            # get parent directory of args.resume
-            resume_file = Path(args.resume)
-            resume_folder = resume_file.parents[0]
-            decomposed_file = resume_folder/"decomposed_model.pth"
-            # TODO 
-            #   when resuming a resumed training job,
-            #   decomposed_file does not exist
-            #   go to resumed dir, fetch (modified_)arg.yaml
-            #   copy decomposed_model.pth from there
-            model = torch.load(decomposed_file)
-        else:
-            # TODO save pretrained model
-            torch.save(model, os.path.join(output_dir, "pretrained_model.pth"))
+    # if args.decompose:
+    #     if args.resume:
+    #         # get parent directory of args.resume
+    #         resume_file = Path(args.resume)
+    #         resume_folder = resume_file.parents[0]
+    #         decomposed_file = resume_folder/"decomposed_model.pth"
+    #         # TODO 
+    #         #   when resuming a resumed training job,
+    #         #   decomposed_file does not exist
+    #         #   go to resumed dir, fetch (modified_)arg.yaml
+    #         #   copy decomposed_model.pth from there
+    #         model = torch.load(decomposed_file)
+    #     else:
+    #         # TODO save pretrained model
+    #         torch.save(model, os.path.join(output_dir, "pretrained_model.pth"))
             
-            # TODO: factorize model
-            factorize_network(
-                model,
-                layers=args.layer_nrs,
-                rank=args.fact_rank,
-                factorization=args.factorization,
-                # verbose=True,
-                # return_error=True,
-            )
-            # _logger.info(output)
+    #         # TODO: factorize model
+    #         factorize_network(
+    #             model,
+    #             layers=args.layer_nrs,
+    #             rank=args.fact_rank,
+    #             factorization=args.factorization,
+    #             # verbose=True,
+    #             # return_error=True,
+    #         )
+    #         # _logger.info(output)
 
-            # TODO save decomposed model
-            torch.save(model, os.path.join(output_dir, "decomposed_model.pth"))
+    #         # TODO save decomposed model
+    #         torch.save(model, os.path.join(output_dir, "decomposed_model.pth"))
 
-            # TODO: evaluate decomposed model
+    #         # TODO: evaluate decomposed model
 
     # setup augmentation batch splits for contrastive loss or split bn
     num_aug_splits = 0
@@ -722,42 +726,51 @@ def main():
             f.write(yaml.safe_dump(args.__dict__, default_flow_style=False))
 
     try:
-        for epoch in range(start_epoch, num_epochs):
-            if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
-                loader_train.sampler.set_epoch(epoch)
+        train_metrics = validate(model, loader_train, train_loss_fn, args, amp_autocast=amp_autocast)
+        eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
 
-            train_metrics = train_one_epoch(
-                epoch, model, loader_train, optimizer, train_loss_fn, args,
-                lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
+        if output_dir is not None:
+            update_summary(
+                0, train_metrics, eval_metrics, os.path.join(output_dir, 'eval_summary.csv'),
+                write_header=True, # best_metric is None, 
+                log_wandb=args.log_wandb and has_wandb)
 
-            if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-                if args.local_rank == 0:
-                    _logger.info("Distributing BatchNorm running means and vars")
-                distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
+        # for epoch in range(start_epoch, num_epochs):
+        #     if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
+        #         loader_train.sampler.set_epoch(epoch)
 
-            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
+        #     train_metrics = train_one_epoch(
+        #         epoch, model, loader_train, optimizer, train_loss_fn, args,
+        #         lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+        #         amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
-            if model_ema is not None and not args.model_ema_force_cpu:
-                if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-                    distribute_bn(model_ema, args.world_size, args.dist_bn == 'reduce')
-                ema_eval_metrics = validate(
-                    model_ema.module, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)')
-                eval_metrics = ema_eval_metrics
+        #     if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
+        #         if args.local_rank == 0:
+        #             _logger.info("Distributing BatchNorm running means and vars")
+        #         distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
-            if lr_scheduler is not None:
-                # step LR for next epoch
-                lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
+        #     eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
 
-            if output_dir is not None:
-                update_summary(
-                    epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
-                    write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
+        #     if model_ema is not None and not args.model_ema_force_cpu:
+        #         if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
+        #             distribute_bn(model_ema, args.world_size, args.dist_bn == 'reduce')
+        #         ema_eval_metrics = validate(
+        #             model_ema.module, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)')
+        #         eval_metrics = ema_eval_metrics
 
-            if saver is not None:
-                # save proper checkpoint with eval metric
-                save_metric = eval_metrics[eval_metric]
-                best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
+        #     if lr_scheduler is not None:
+        #         # step LR for next epoch
+        #         lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
+
+        #     if output_dir is not None:
+        #         update_summary(
+        #             epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
+        #             write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
+
+        #     if saver is not None:
+        #         # save proper checkpoint with eval metric
+        #         save_metric = eval_metrics[eval_metric]
+        #         best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
 
     except KeyboardInterrupt:
         pass
