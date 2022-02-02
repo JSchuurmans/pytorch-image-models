@@ -18,7 +18,6 @@ drop_connect: 0.2
 model_ema: true 
 model_ema_decay: 0.9999 
 aa: 'rand-m9-mstd0.5'
-rand_m9_mstd: 0.5 
 remode: pixel 
 reprob: 0.2 
 amp: false
