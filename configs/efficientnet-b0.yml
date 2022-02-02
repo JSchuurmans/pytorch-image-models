@@ -1,0 +1,35 @@
+# https://rwightman.github.io/pytorch-image-models/training_hparam_examples/#efficientnet-b0-with-randaugment-777-top-1-953-top-5
+# EfficientNet-B0 with RandAugment - 77.7 top-1, 95.3 top-5=
+# ./distributed_train.sh 2 
+
+# python train.py /scratch/jetzeschuurman/imagenet/ -c ./configs/efficientnet-b0.yml
+
+model: efficientnet_b0
+batch_size: 256 # 384 -> cuda out of mem
+sched: step 
+epochs: 450 
+decay_epochs: 2.4 
+decay_rate: .97 
+opt: rmsproptf 
+opt_eps: .001 
+workers: 8 
+warmup_lr: 1e-6 
+weight_decay: 1e-5 
+drop: 0.2
+drop_connect: 0.2 
+model_ema: true 
+model_ema_decay: 0.9999 
+aa: 'rand-m9-mstd0.5'
+remode: pixel 
+reprob: 0.2 
+amp: false # true
+lr: .048
+
+experiment: b0
+initial_checkpoint: ''
+resume: ''
+output: '/scratch/jetzeschuurman/imagenet/logs'
+log_wandb: true
+
+cuda: '1'
+cpu: '4'
